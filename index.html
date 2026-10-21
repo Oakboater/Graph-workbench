@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graph Builder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Graph Builder</h1>
+  <span>Scientific graph maker</span>
+</header>
+
+<div class="layout">
+  <!-- Left Panel -->
+  <div>
+    <div class="card">
+      <h2>1. Graph Type</h2>
+      <div class="type-bar">
+        <button class="type-btn active" data-type="line" onclick="setChartType('line')">Line Graph</button>
+        <button class="type-btn" data-type="bar" onclick="setChartType('bar')">Bar Chart</button>
+        <button class="type-btn" data-type="area" onclick="setChartType('area')">Filled Line</button>
+        <button class="type-btn" data-type="scatter_trend" onclick="setChartType('scatter_trend')">Scatter + Fit</button>
+        <button class="type-btn" data-type="histogram" onclick="setChartType('histogram')">Histogram</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. Graph Labels &amp; Axis Scales</h2>
+      <div style="margin-bottom:10px;">
+        <label>Graph Title</label>
+        <input type="text" id="title" value="Graph" oninput="draw()">
+      </div>
+      <div class="row">
+        <div>
+          <label>X-Axis Label (Bottom)</label>
+          <input type="text" id="xlabel" value="Time (s)" oninput="draw()">
+        </div>
+        <div>
+          <label>Y-Axis Label (Side)</label>
+          <input type="text" id="ylabel" value="Meters (m)" oninput="draw()">
+        </div>
+      </div>
+
+      <div class="xy-box" style="margin-bottom:0;">
+        <div style="font-size:12px; color:#5c5952; margin-bottom:7px;">
+          Axis Scale Numbers (Type comma-separated numbers like 0, 10, 20, 30, 40, 50 or leave blank for Auto)
+        </div>
+        <div class="xy-row" id="scale_x_row">
+          <div class="xy-tag">SCALE X</div>
+          <input type="text" class="xy-input" id="scale_x" value="0, 10, 20, 30, 40, 50" placeholder="Auto, or e.g. 0, 10, 20, 30, 40, 50" oninput="draw()">
+        </div>
+        <div class="xy-row">
+          <div class="xy-tag">SCALE Y</div>
+          <input type="text" class="xy-input" id="scale_y" value="0, 10, 20, 30, 40, 50" placeholder="Auto, or e.g. 0, 10, 20, 30, 40, 50" oninput="draw()">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <span id="points_heading">3. Points to Plot</span>
+        <button class="btn btn-primary" id="add_btn" onclick="addSeries()">+ Add Another Line / Bar</button>
+      </h2>
+
+      <div class="series-tabs" id="seriesTabs"></div>
+      <div id="seriesEditor"></div>
+    </div>
+
+    <div class="card">
+      <h2>4. Display Options</h2>
+      <div class="chk-row">
+        <label><input type="checkbox" id="show_grid" checked onchange="draw()"> Show Grid Lines</label>
+        <label><input type="checkbox" id="show_values" onchange="draw()"> Show Numbers on Points/Bars</label>
+        <label><input type="checkbox" id="show_legend" onchange="draw()"> Show Legend Box</label>
+      </div>
+      <div class="row" style="margin-bottom:0;">
+        <div>
+          <label>Bar Width (for Bar Charts)</label>
+          <input type="number" id="bar_width" value="0.6" step="0.05" min="0.15" max="0.95" oninput="draw()">
+        </div>
+        <div>
+          <label>Horizontal Reference Line Y (optional)</label>
+          <input type="text" id="ref_line_y" value="" placeholder="e.g. 25" oninput="draw()">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="preview-sticky">
+    <div class="card">
+      <h2>
+        <span>Live Graph Preview</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary" onclick="downloadPNG()">Download PNG (300 DPI)</button>
+        </div>
+      </h2>
+      <div class="canvas-box">
+        <canvas id="graphCanvas" width="1400" height="900"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <span>Python (Matplotlib) Code</span>
+        <button class="btn" onclick="copyCode()">Copy Code</button>
+      </h2>
+      <pre id="codeBox"></pre>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
