@@ -366,20 +366,30 @@ function markResCustom() {
   document.getElementById('res_preset').value = 'custom';
 }
 
-// Compute clean tick marks when Scale X or Scale Y is left empty
+// Compute clean tick marks when Scale X or Scale Y is left empty.
+// Steps only come from 1, 2, 2.5 and 5 x 10^n, aiming for about 4 divisions,
+// so every square always has a tidy value like 2, 5 or 10 per square.
 function buildAutoTicks(minVal, maxVal) {
   if (minVal === maxVal) {
     minVal -= 1;
     maxVal += 1;
   }
   const span = maxVal - minVal;
-  const rawStep = span / 5;
-  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-  const norm = rawStep / mag;
-  let step = mag;
-  if (norm > 5) step = 10 * mag;
-  else if (norm > 2) step = 5 * mag;
-  else if (norm > 1) step = 2 * mag;
+
+  const mag = Math.pow(10, Math.floor(Math.log10(span / 4)));
+  const candidates = [1, 2, 2.5, 5, 10].map(m => m * mag);
+
+  let step = candidates[0];
+  let bestScore = Infinity;
+  candidates.forEach(c => {
+    const divisions = span / c;
+    if (divisions < 2 || divisions > 8) return;
+    const score = Math.abs(divisions - 4);
+    if (score < bestScore - 1e-9 || (Math.abs(score - bestScore) < 1e-9 && c > step)) {
+      bestScore = score;
+      step = c;
+    }
+  });
 
   const start = Math.floor(minVal / step) * step;
   const end = Math.ceil(maxVal / step) * step;
@@ -388,6 +398,47 @@ function buildAutoTicks(minVal, maxVal) {
     ticks.push(Number(v.toFixed(6)));
   }
   return ticks;
+}
+
+// Pick the small-square value for graph paper mode, so each little square is a
+// tidy number like 0.5, 1 or 2 instead of an awkward 0.4 or 0.75
+function minorStepFor(interval) {
+  if (!isFinite(interval) || interval <= 0) return null;
+  const isTidy = v => {
+    const s = v / Math.pow(10, Math.floor(Math.log10(v)));
+    return [1, 2, 2.5, 5].includes(Math.round(s * 1000) / 1000);
+  };
+  // try the classic looks first: 5 or 4 small squares per big square
+  for (const d of [5, 4, 10, 3, 2]) {
+    if (isTidy(interval / d)) return interval / d;
+  }
+  // odd intervals like 3 or 7: fall back to whole units per small square
+  const unit = Math.pow(10, Math.floor(Math.log10(interval)));
+  if (interval / unit >= 2) return unit;
+  return interval / 4;
+}
+
+// Work out tidy histogram bins (widths of 1, 2, 2.5 or 5 x 10^n) so the bars
+// never land on awkward edges like 1.67
+function buildHistogram(vals) {
+  const minV = Math.min(...vals);
+  const maxV = Math.max(...vals);
+  const rawWidth = (maxV - minV || 1) / 6;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawWidth)));
+  let binW = [1, 2, 2.5, 5, 10].map(m => m * mag).find(w => w >= rawWidth);
+  if (!binW) binW = 10 * mag;
+
+  const binStart = Math.floor((minV + 1e-9) / binW) * binW;
+  const binEnd = Math.ceil((maxV - 1e-9) / binW) * binW;
+  const bins = Math.max(1, Math.round((binEnd - binStart) / binW));
+  const counts = new Array(bins).fill(0);
+  vals.forEach(v => {
+    let idx = Math.floor((v - binStart) / binW);
+    if (idx >= bins) idx = bins - 1;
+    if (idx < 0) idx = 0;
+    counts[idx]++;
+  });
+  return { binStart, binW, bins, counts };
 }
 
 // Wrap text onto as many lines as needed at its chosen size.
@@ -548,6 +599,15 @@ function draw() {
     stepX = plotW / nCats;
   }
 
+  // Histogram: tidy bins worked out early so the Y axis fits the actual counts
+  let histData = null;
+  if (isHist) {
+    const vals = splitNumbers(list[0] ? list[0].values : '');
+    if (vals.length > 0) {
+      histData = buildHistogram(vals);
+    }
+  }
+
   // Line/scatter: numeric X ticks and scaling
   let xTicks = null;
   let toX = null;
@@ -574,7 +634,7 @@ function draw() {
   // ---- Y ticks and scaling ----
   let allY = [0];
   if (isHist) {
-    list.forEach(s => allY.push(splitNumbers(s.values).length));
+    if (histData) allY.push(...histData.counts);
   } else {
     list.forEach(s => {
       const { ys } = pairXY(s.x_values, s.values, isBar);
@@ -601,13 +661,15 @@ function draw() {
   const inPlotY = py => py >= padT - 2 && py <= padT + plotH + 2;
 
   if (gridStyle === 'paper') {
-    // Fine minor lines every fifth of an interval, like graph paper squares
+    // Fine minor lines at tidy small-square values, like real graph paper
     ctx.strokeStyle = '#e8e4db';
     ctx.lineWidth = Math.max(0.8, 1.1 * k);
     for (let i = 0; i < yTicks.length - 1; i++) {
-      const step = (yTicks[i + 1] - yTicks[i]) / 5;
-      for (let m = 1; m <= 4; m++) {
-        const py = toY(yTicks[i] + m * step);
+      const minor = minorStepFor(yTicks[i + 1] - yTicks[i]);
+      if (!minor) continue;
+      const n = Math.round((yTicks[i + 1] - yTicks[i]) / minor);
+      for (let m = 1; m < n; m++) {
+        const py = toY(yTicks[i] + m * minor);
         if (!inPlotY(py)) continue;
         ctx.beginPath();
         ctx.moveTo(padL, py);
@@ -615,7 +677,7 @@ function draw() {
         ctx.stroke();
       }
     }
-    // Minor verticals: between numeric ticks, or at category boundaries
+    // Minor verticals: tidy steps between numeric ticks, or category boundaries
     if (isBar) {
       for (let i = 0; i <= nCats; i++) {
         const px = padL + stepX * i;
@@ -626,9 +688,11 @@ function draw() {
       }
     } else if (xTicks) {
       for (let i = 0; i < xTicks.length - 1; i++) {
-        const step = (xTicks[i + 1] - xTicks[i]) / 5;
-        for (let m = 1; m <= 4; m++) {
-          const px = toX(xTicks[i] + m * step);
+        const minor = minorStepFor(xTicks[i + 1] - xTicks[i]);
+        if (!minor) continue;
+        const n = Math.round((xTicks[i + 1] - xTicks[i]) / minor);
+        for (let m = 1; m < n; m++) {
+          const px = toX(xTicks[i] + m * minor);
           ctx.beginPath();
           ctx.moveTo(px, padT);
           ctx.lineTo(px, padT + plotH);
@@ -763,18 +827,8 @@ function draw() {
 
   // ---- HISTOGRAM ----
   } else if (isHist) {
-    const vals = splitNumbers(list[0] ? list[0].values : '');
-    if (vals.length > 0) {
-      const minV = Math.min(...vals);
-      const maxV = Math.max(...vals);
-      const bins = 6;
-      const binW = (maxV - minV || 1) / bins;
-      const counts = new Array(bins).fill(0);
-      vals.forEach(v => {
-        let idx = Math.floor((v - minV) / binW);
-        if (idx >= bins) idx = bins - 1;
-        counts[idx]++;
-      });
+    if (histData) {
+      const { binStart, binW, bins, counts } = histData;
 
       const stepW = (plotW * 0.88) / bins;
       const startX = padL + plotW * 0.06;
@@ -788,13 +842,17 @@ function draw() {
         ctx.strokeStyle = '#1c1b18';
         ctx.lineWidth = 2 * k;
         ctx.strokeRect(bx, topPy, stepW, basePy - topPy);
-
-        ctx.fillStyle = '#1c1b18';
-        ctx.font = `${valueFont}px ${fontName}`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText((minV + i * binW).toFixed(0), bx, padT + plotH + 14 * k);
       });
+
+      // bin edge labels along the bottom, always exact tidy numbers
+      ctx.fillStyle = '#1c1b18';
+      ctx.font = `${valueFont}px ${fontName}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      for (let i = 0; i <= bins; i++) {
+        const label = Number((binStart + i * binW).toFixed(4));
+        ctx.fillText(String(label), startX + i * stepW, padT + plotH + 14 * k);
+      }
     }
 
   // ---- LINE, FILLED LINE, OR SCATTER + BEST FIT ----
@@ -1095,6 +1153,19 @@ function updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showLegend, lis
         lines.push(`ax.bar(${cats}, ${heights}, color='${s.color}', edgecolor='black', label='${s.label}')`);
       }
     });
+  } else if (currentChartType === 'histogram') {
+    const vals = splitNumbers(list[0] ? list[0].values : '');
+    if (vals.length > 0) {
+      const h = buildHistogram(vals);
+      const edges = [];
+      for (let i = 0; i <= h.bins; i++) {
+        edges.push(Number((h.binStart + i * h.binW).toFixed(4)));
+      }
+      lines.push("# values and tidy bin edges");
+      lines.push(`values = [${vals.join(', ')}]`);
+      lines.push(`bins = [${edges.join(', ')}]`);
+      lines.push(`ax.hist(values, bins=bins, color='${list[0].color}', edgecolor='black')`);
+    }
   } else {
     lines.push("# x and y coordinates");
     list.forEach((s, i) => {
