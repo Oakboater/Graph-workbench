@@ -30,8 +30,8 @@
     <div class="card">
       <h2>2. Graph Labels &amp; Axis Scales</h2>
       <div style="margin-bottom:10px;">
-        <label>Graph Title</label>
-        <input type="text" id="title" value="Graph" oninput="draw()">
+        <label>Graph Title (press Enter for a new line)</label>
+        <textarea id="title" rows="2" oninput="draw()">Graph</textarea>
       </div>
       <div class="row">
         <div>
@@ -157,7 +157,7 @@
           <input type="number" id="res_h" value="900" min="400" max="6000" step="10" oninput="markResCustom(); draw()">
         </div>
       </div>
-      <div class="note">The PNG downloads at exactly this pixel size. Long titles automatically shrink and wrap to fit the page instead of running off the edges.</div>
+      <div class="note">Long titles wrap down onto extra lines at the size you chose, so they never run off the edges. In the title box, Enter starts a new line.</div>
     </div>
   </div>
 
@@ -186,5 +186,5 @@
 </div>
 
 <script src="script.js"></script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a55b62248ee91b15',t:'MTc5Mzg3NjcyNg=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a55b62248ee91b15',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
