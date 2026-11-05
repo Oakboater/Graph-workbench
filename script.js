@@ -390,32 +390,48 @@ function buildAutoTicks(minVal, maxVal) {
   return ticks;
 }
 
-// Shrink and wrap a long title so it stays inside the page
-function layoutTitle(ctx, text, fontName, baseSize, maxW) {
-  ctx.font = `${baseSize}px ${fontName}`;
-  const w = ctx.measureText(text).width;
-  if (w <= maxW) return { lines: [text], size: baseSize };
+// Wrap text onto as many lines as needed at its chosen size.
+// Manual line breaks (Enter in the title box) are kept as-is.
+function layoutTitle(ctx, text, fontName, size, maxW) {
+  const paragraphs = String(text ?? '').split('\n');
+  ctx.font = `${size}px ${fontName}`;
 
-  let size = Math.floor(baseSize * maxW / w);
-  if (size >= 14 || !text.includes(' ')) {
-    return { lines: [text], size: Math.max(10, size) };
-  }
-
-  // Split into two balanced lines and shrink those instead
-  const words = text.split(/\s+/);
-  let best = null;
-  let bestMax = Infinity;
-  for (let i = 1; i < words.length; i++) {
-    const l1 = words.slice(0, i).join(' ');
-    const l2 = words.slice(i).join(' ');
-    const m = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width);
-    if (m < bestMax) {
-      bestMax = m;
-      best = [l1, l2];
+  // Only shrink if one single word is wider than the whole page
+  const words = paragraphs.flatMap(p => p.split(/\s+/).filter(Boolean));
+  let useSize = size;
+  if (words.length > 0) {
+    let widest = 0;
+    words.forEach(word => {
+      widest = Math.max(widest, ctx.measureText(word).width);
+    });
+    if (widest > maxW) {
+      useSize = Math.max(10, Math.floor(size * maxW / widest));
+      ctx.font = `${useSize}px ${fontName}`;
     }
   }
-  size = Math.max(10, Math.floor(baseSize * maxW / bestMax));
-  return { lines: best, size };
+
+  // Greedy word wrap: fill each line as far as it goes, then start a new one
+  const lines = [];
+  paragraphs.forEach(p => {
+    const pWords = p.split(/\s+/).filter(Boolean);
+    if (pWords.length === 0) {
+      lines.push('');
+      return;
+    }
+    let current = '';
+    pWords.forEach(word => {
+      const test = current ? current + ' ' + word : word;
+      if (!current || ctx.measureText(test).width <= maxW) {
+        current = test;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+    });
+    if (current) lines.push(current);
+  });
+
+  return { lines, size: useSize };
 }
 
 // Create a canvas pattern for hatched bars (diagonal, dots, crosshatch)
@@ -500,10 +516,15 @@ function draw() {
 
   // Plot frame geometry, scaled with the canvas size
   const k = W / 1400;
+
+  // Lay out the title and x label first so the padding grows to fit their lines
+  const titleLayout = layoutTitle(ctx, title, fontName, titleFont, W - 70 * k);
+  const xLabelLayout = layoutTitle(ctx, xlabel, fontName, labelFont, W - 90 * k);
+
   const padL = Math.max(135 * k, tickFont * 2.4 + 70 * k);
   const padR = 55 * k;
-  const padT = Math.max(90 * k, titleFont * 1.6 + 26 * k);
-  const padB = Math.max(120 * k, tickFont * 1.7 + 64 * k);
+  const padT = Math.max(90 * k, titleLayout.lines.length * titleLayout.size * 1.16 + 30 * k);
+  const padB = Math.max(120 * k, tickFont * 1.7 + 64 * k + (xLabelLayout.lines.length - 1) * labelFont * 1.2);
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
@@ -903,23 +924,23 @@ function draw() {
   ctx.lineTo(padL + plotW, padT + plotH);
   ctx.stroke();
 
-  // Title (auto-shrunk and wrapped so it never runs off the page)
-  const titleLayout = layoutTitle(ctx, title, fontName, titleFont, W - 70 * k);
+  // Title, wrapped down onto as many lines as needed
   ctx.fillStyle = '#1c1b18';
   ctx.font = `${titleLayout.size}px ${fontName}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
-  if (titleLayout.lines.length === 1) {
-    ctx.fillText(titleLayout.lines[0], padL + plotW / 2, padT - 20 * k);
-  } else {
-    ctx.fillText(titleLayout.lines[1], padL + plotW / 2, padT - 14 * k);
-    ctx.fillText(titleLayout.lines[0], padL + plotW / 2, padT - 14 * k - titleLayout.size * 1.12);
-  }
+  const titleLH = titleLayout.size * 1.16;
+  titleLayout.lines.forEach((line, i) => {
+    const baseline = padT - 20 * k - (titleLayout.lines.length - 1 - i) * titleLH;
+    ctx.fillText(line, padL + plotW / 2, baseline);
+  });
 
   // Axis labels
   ctx.font = `${labelFont}px ${fontName}`;
   ctx.textBaseline = 'top';
-  ctx.fillText(xlabel, padL + plotW / 2, padT + plotH + 60 * k);
+  xLabelLayout.lines.forEach((line, i) => {
+    ctx.fillText(line, padL + plotW / 2, padT + plotH + 60 * k + i * labelFont * 1.2);
+  });
 
   ctx.save();
   ctx.translate(padL * 0.31, padT + plotH / 2);
@@ -1096,7 +1117,8 @@ function updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showLegend, lis
 
   lines.push("");
   lines.push("# labels and scale");
-  lines.push(`ax.set_title('${title.replace(/'/g, "\\'")}', fontsize=${titleFs})`);
+  const pyTitle = title.replace(/'/g, "\\'").replace(/\n/g, "\\n");
+  lines.push(`ax.set_title('${pyTitle}', fontsize=${titleFs})`);
   lines.push(`ax.set_xlabel('${xlabel.replace(/'/g, "\\'")}', fontsize=${labelFs})`);
   lines.push(`ax.set_ylabel('${ylabel.replace(/'/g, "\\'")}', fontsize=${labelFs})`);
   lines.push(`ax.tick_params(labelsize=${tickFs})`);
