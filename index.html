@@ -72,7 +72,6 @@
     <div class="card">
       <h2>4. Display Options</h2>
       <div class="chk-row">
-        <label><input type="checkbox" id="show_grid" checked onchange="draw()"> Show Grid Lines</label>
         <label><input type="checkbox" id="show_values" onchange="draw()"> Show Numbers on Points/Bars</label>
         <label><input type="checkbox" id="show_legend" onchange="draw()"> Show Legend Box</label>
       </div>
@@ -87,6 +86,79 @@
         </div>
       </div>
     </div>
+
+    <div class="card">
+      <h2>5. Fonts, Grid &amp; Background</h2>
+      <div class="row">
+        <div>
+          <label>Font Family</label>
+          <select id="font_family" onchange="draw()">
+            <option value="sans" selected>Clean Sans (Arial)</option>
+            <option value="georgia">Serif (Georgia)</option>
+            <option value="times">Serif (Times New Roman)</option>
+            <option value="mono">Monospace (Courier New)</option>
+            <option value="verdana">Verdana</option>
+            <option value="trebuchet">Trebuchet MS</option>
+          </select>
+        </div>
+        <div>
+          <label>Grid Style</label>
+          <select id="grid_style" onchange="draw()">
+            <option value="dashed" selected>Dashed Lines</option>
+            <option value="solid">Solid Lines</option>
+            <option value="dotted">Dotted Lines</option>
+            <option value="paper">Graph Paper (Small Squares)</option>
+            <option value="none">No Grid</option>
+          </select>
+        </div>
+      </div>
+      <div class="row3">
+        <div>
+          <label>Title Font Size</label>
+          <input type="number" id="title_font" value="28" min="8" max="200" oninput="draw()">
+        </div>
+        <div>
+          <label>Axis Label Size</label>
+          <input type="number" id="label_font" value="24" min="8" max="200" oninput="draw()">
+        </div>
+        <div>
+          <label>Tick Number Size</label>
+          <input type="number" id="tick_font" value="23" min="8" max="200" oninput="draw()">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Canvas Background</label>
+          <select id="canvas_bg" onchange="draw()">
+            <option value="#ffffff" selected>White</option>
+            <option value="#fbf9f5">Warm Paper</option>
+            <option value="transparent">Transparent (PNG)</option>
+          </select>
+        </div>
+        <div>
+          <label>Resolution Preset</label>
+          <select id="res_preset" onchange="applyResPreset(this.value)">
+            <option value="custom" selected>Custom</option>
+            <option value="small">Small (1000 x 650)</option>
+            <option value="medium">Medium (1400 x 900)</option>
+            <option value="large">Large (2100 x 1350)</option>
+            <option value="a4">A4 Landscape 300 DPI (3508 x 2480)</option>
+            <option value="square">Square (1400 x 1400)</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-bottom:0;">
+        <div>
+          <label>Output Width (px)</label>
+          <input type="number" id="res_w" value="1400" min="400" max="6000" step="10" oninput="markResCustom(); draw()">
+        </div>
+        <div>
+          <label>Output Height (px)</label>
+          <input type="number" id="res_h" value="900" min="400" max="6000" step="10" oninput="markResCustom(); draw()">
+        </div>
+      </div>
+      <div class="note">The PNG downloads at exactly this pixel size. Long titles automatically shrink and wrap to fit the page instead of running off the edges.</div>
+    </div>
   </div>
 
   <!-- Right Panel -->
@@ -95,7 +167,7 @@
       <h2>
         <span>Live Graph Preview</span>
         <div style="display:flex; gap:8px;">
-          <button class="btn btn-primary" onclick="downloadPNG()">Download PNG (300 DPI)</button>
+          <button class="btn btn-primary" onclick="downloadPNG()">Download PNG</button>
         </div>
       </h2>
       <div class="canvas-box">

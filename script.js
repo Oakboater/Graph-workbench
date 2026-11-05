@@ -44,8 +44,25 @@ let savedBarMeta = {
   scale_y: '0, 5, 10, 15, 20'
 };
 
+// Canvas font stacks for each family choice
+const FONT_STACKS = {
+  sans: '"DejaVu Sans", Arial, Helvetica, sans-serif',
+  georgia: 'Georgia, "Times New Roman", serif',
+  times: '"Times New Roman", Times, serif',
+  mono: '"Courier New", Courier, monospace',
+  verdana: 'Verdana, Geneva, sans-serif',
+  trebuchet: '"Trebuchet MS", "Segoe UI", sans-serif'
+};
+
 function activeList() {
   return currentChartType === 'bar' ? barSeries : lineSeries;
+}
+
+// Read a number input safely with a default and limits
+function clampInt(id, def, min, max) {
+  const v = parseFloat(document.getElementById(id).value);
+  if (Number.isNaN(v)) return def;
+  return Math.max(min, Math.min(max, Math.round(v)));
 }
 
 // Split comma-separated text into trimmed items
@@ -317,6 +334,38 @@ function escapeHtml(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Apply a resolution preset and scale the font sizes to match
+function applyResPreset(val) {
+  if (val === 'custom') return;
+  const sizes = {
+    small: [1000, 650],
+    medium: [1400, 900],
+    large: [2100, 1350],
+    a4: [3508, 2480],
+    square: [1400, 1400]
+  };
+  const pick = sizes[val];
+  if (!pick) return;
+
+  const curW = clampInt('res_w', 1400, 400, 6000);
+  const ratio = pick[0] / curW;
+
+  ['title_font', 'label_font', 'tick_font'].forEach(id => {
+    const el = document.getElementById(id);
+    const cur = parseFloat(el.value) || 28;
+    el.value = Math.max(8, Math.min(200, Math.round(cur * ratio)));
+  });
+
+  document.getElementById('res_w').value = pick[0];
+  document.getElementById('res_h').value = pick[1];
+  draw();
+}
+
+// Manual width/height edits switch the preset box back to Custom
+function markResCustom() {
+  document.getElementById('res_preset').value = 'custom';
+}
+
 // Compute clean tick marks when Scale X or Scale Y is left empty
 function buildAutoTicks(minVal, maxVal) {
   if (minVal === maxVal) {
@@ -341,81 +390,173 @@ function buildAutoTicks(minVal, maxVal) {
   return ticks;
 }
 
+// Shrink and wrap a long title so it stays inside the page
+function layoutTitle(ctx, text, fontName, baseSize, maxW) {
+  ctx.font = `${baseSize}px ${fontName}`;
+  const w = ctx.measureText(text).width;
+  if (w <= maxW) return { lines: [text], size: baseSize };
+
+  let size = Math.floor(baseSize * maxW / w);
+  if (size >= 14 || !text.includes(' ')) {
+    return { lines: [text], size: Math.max(10, size) };
+  }
+
+  // Split into two balanced lines and shrink those instead
+  const words = text.split(/\s+/);
+  let best = null;
+  let bestMax = Infinity;
+  for (let i = 1; i < words.length; i++) {
+    const l1 = words.slice(0, i).join(' ');
+    const l2 = words.slice(i).join(' ');
+    const m = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width);
+    if (m < bestMax) {
+      bestMax = m;
+      best = [l1, l2];
+    }
+  }
+  size = Math.max(10, Math.floor(baseSize * maxW / bestMax));
+  return { lines: best, size };
+}
+
 // Create a canvas pattern for hatched bars (diagonal, dots, crosshatch)
-function createBarPattern(ctx, color, hatch) {
+function createBarPattern(ctx, color, hatch, k) {
   const pCanvas = document.createElement('canvas');
-  pCanvas.width = 16;
-  pCanvas.height = 16;
+  pCanvas.width = Math.max(8, Math.round(16 * k));
+  pCanvas.height = Math.max(8, Math.round(16 * k));
   const pCtx = pCanvas.getContext('2d');
+  const s = pCanvas.width;
 
   pCtx.fillStyle = color;
-  pCtx.fillRect(0, 0, 16, 16);
+  pCtx.fillRect(0, 0, s, s);
 
   pCtx.strokeStyle = 'rgba(255,255,255,0.65)';
   pCtx.fillStyle = 'rgba(255,255,255,0.65)';
-  pCtx.lineWidth = 2;
+  pCtx.lineWidth = Math.max(1.5, 2 * k);
 
   if (hatch === '///') {
     pCtx.beginPath();
-    pCtx.moveTo(-4, 16); pCtx.lineTo(16, -4);
-    pCtx.moveTo(4, 20);  pCtx.lineTo(20, 4);
+    pCtx.moveTo(-s / 4, s); pCtx.lineTo(s, -s / 4);
+    pCtx.moveTo(s / 4, s * 1.25); pCtx.lineTo(s * 1.25, s / 4);
     pCtx.stroke();
   } else if (hatch === '...') {
     pCtx.beginPath();
-    pCtx.arc(4, 4, 2, 0, Math.PI * 2);
-    pCtx.arc(12, 12, 2, 0, Math.PI * 2);
+    pCtx.arc(s / 4, s / 4, s / 8, 0, Math.PI * 2);
+    pCtx.arc(s * 0.75, s * 0.75, s / 8, 0, Math.PI * 2);
     pCtx.fill();
   } else if (hatch === 'xxx') {
     pCtx.beginPath();
-    pCtx.moveTo(0, 16); pCtx.lineTo(16, 0);
-    pCtx.moveTo(0, 0);  pCtx.lineTo(16, 16);
+    pCtx.moveTo(0, s); pCtx.lineTo(s, 0);
+    pCtx.moveTo(0, 0); pCtx.lineTo(s, s);
     pCtx.stroke();
   }
   return ctx.createPattern(pCanvas, 'repeat');
 }
 
-// Draw the graph onto the canvas with Matplotlib-matching proportions and margins
+// Draw the graph onto the canvas at the chosen resolution
 function draw() {
   const canvas = document.getElementById('graphCanvas');
-  const ctx = canvas.getContext('2d');
+  const resW = clampInt('res_w', 1400, 400, 6000);
+  const resH = clampInt('res_h', 900, 400, 6000);
+  if (canvas.width !== resW) canvas.width = resW;
+  if (canvas.height !== resH) canvas.height = resH;
+
   const W = canvas.width;
   const H = canvas.height;
+  const ctx = canvas.getContext('2d');
 
   const title = document.getElementById('title').value;
   const xlabel = document.getElementById('xlabel').value;
   const ylabel = document.getElementById('ylabel').value;
   const scaleX = splitNumbers(document.getElementById('scale_x').value);
   const scaleY = splitNumbers(document.getElementById('scale_y').value);
-  const showGrid = document.getElementById('show_grid').checked;
   const showValues = document.getElementById('show_values').checked;
   const showLegend = document.getElementById('show_legend').checked;
   const barWidthRatio = parseFloat(document.getElementById('bar_width').value || 0.6);
   const refLineRaw = document.getElementById('ref_line_y').value.trim();
   const list = activeList();
 
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, W, H);
+  const fontKey = document.getElementById('font_family').value;
+  const fontName = FONT_STACKS[fontKey] || FONT_STACKS.sans;
+  const titleFont = clampInt('title_font', 28, 8, 200);
+  const labelFont = clampInt('label_font', 24, 8, 200);
+  const tickFont = clampInt('tick_font', 23, 8, 200);
+  const valueFont = Math.max(9, Math.round(tickFont * 0.88));
+  const gridStyle = document.getElementById('grid_style').value;
+  const canvasBg = document.getElementById('canvas_bg').value;
 
-  // Plot frame geometry
-  const padL = 135;
-  const padR = 55;
-  const padT = 90;
-  const padB = 120;
+  const isBar = (currentChartType === 'bar');
+  const isHist = (currentChartType === 'histogram');
+
+  // Background fill (or clear for a transparent PNG)
+  const canvasBox = document.querySelector('.canvas-box');
+  if (canvasBg === 'transparent') {
+    canvasBox.classList.add('transparent');
+    ctx.clearRect(0, 0, W, H);
+  } else {
+    canvasBox.classList.remove('transparent');
+    ctx.fillStyle = canvasBg;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Plot frame geometry, scaled with the canvas size
+  const k = W / 1400;
+  const padL = Math.max(135 * k, tickFont * 2.4 + 70 * k);
+  const padR = 55 * k;
+  const padT = Math.max(90 * k, titleFont * 1.6 + 26 * k);
+  const padB = Math.max(120 * k, tickFont * 1.7 + 64 * k);
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
-  const fontName = '"DejaVu Sans", Arial, Helvetica, sans-serif';
+  // ---- Parse the data for the current mode ----
 
-  // Gather Y values to compute Y ticks and Matplotlib-style 5% breathing margin
-  let allY = [0];
-  if (currentChartType === 'histogram') {
+  // Bar chart: categories on the bottom axis
+  let categories = [];
+  let barParsed = [];
+  let nCats = 1;
+  let stepX = plotW;
+  if (isBar) {
     list.forEach(s => {
-      const vals = splitNumbers(s.values);
-      allY.push(vals.length);
+      const { xs, ys } = pairXY(s.x_values, s.values, true);
+      if (ys.length === 0) return;
+      xs.forEach(c => {
+        if (!categories.includes(c)) categories.push(c);
+      });
+      barParsed.push({ s, xs, ys, errs: splitNumbers(s.errors) });
     });
+    nCats = Math.max(categories.length, 1);
+    stepX = plotW / nCats;
+  }
+
+  // Line/scatter: numeric X ticks and scaling
+  let xTicks = null;
+  let toX = null;
+  if (!isBar && !isHist) {
+    let allX = [0];
+    list.forEach(s => {
+      const { xs } = pairXY(s.x_values, s.values, false);
+      allX.push(...xs);
+    });
+
+    xTicks = scaleX.length >= 2
+      ? [...new Set(scaleX)].sort((a, b) => a - b)
+      : buildAutoTicks(Math.min(...allX), Math.max(...allX, 1));
+
+    const xTickMin = xTicks[0];
+    const xTickMax = xTicks[xTicks.length - 1];
+    const xSpan = (xTickMax - xTickMin) || 1;
+    // Matplotlib-style breathing margin so points don't touch the frame
+    const xDomainMin = xTickMin - xSpan * 0.045;
+    const xDomainMax = xTickMax + xSpan * 0.045;
+    toX = val => padL + ((val - xDomainMin) / (xDomainMax - xDomainMin)) * plotW;
+  }
+
+  // ---- Y ticks and scaling ----
+  let allY = [0];
+  if (isHist) {
+    list.forEach(s => allY.push(splitNumbers(s.values).length));
   } else {
     list.forEach(s => {
-      const { ys } = pairXY(s.x_values, s.values, currentChartType === 'bar');
+      const { ys } = pairXY(s.x_values, s.values, isBar);
       allY.push(...ys);
     });
   }
@@ -427,85 +568,144 @@ function draw() {
   const yTickMin = yTicks[0];
   const yTickMax = yTicks[yTicks.length - 1];
   const ySpan = (yTickMax - yTickMin) || 1;
-  // Bar charts sit flush on y=0; line/scatter graphs get a 4.5% Matplotlib margin so points don't touch the axis spine
-  const yPadLow = (currentChartType === 'bar' || currentChartType === 'histogram') ? 0 : ySpan * 0.045;
+  // Bars sit flush on y=0; line/scatter graphs get a small margin
+  const yPadLow = (isBar || isHist) ? 0 : ySpan * 0.045;
   const yPadHigh = ySpan * 0.055;
   const yDomainMin = yTickMin - yPadLow;
   const yDomainMax = yTickMax + yPadHigh;
 
   const toY = val => padT + plotH - ((val - yDomainMin) / (yDomainMax - yDomainMin)) * plotH;
 
-  // Draw horizontal grid lines and Y-axis ticks
-  ctx.font = `23px ${fontName}`;
+  // ---- Grid layer ----
+  const inPlotY = py => py >= padT - 2 && py <= padT + plotH + 2;
+
+  if (gridStyle === 'paper') {
+    // Fine minor lines every fifth of an interval, like graph paper squares
+    ctx.strokeStyle = '#e8e4db';
+    ctx.lineWidth = Math.max(0.8, 1.1 * k);
+    for (let i = 0; i < yTicks.length - 1; i++) {
+      const step = (yTicks[i + 1] - yTicks[i]) / 5;
+      for (let m = 1; m <= 4; m++) {
+        const py = toY(yTicks[i] + m * step);
+        if (!inPlotY(py)) continue;
+        ctx.beginPath();
+        ctx.moveTo(padL, py);
+        ctx.lineTo(padL + plotW, py);
+        ctx.stroke();
+      }
+    }
+    // Minor verticals: between numeric ticks, or at category boundaries
+    if (isBar) {
+      for (let i = 0; i <= nCats; i++) {
+        const px = padL + stepX * i;
+        ctx.beginPath();
+        ctx.moveTo(px, padT);
+        ctx.lineTo(px, padT + plotH);
+        ctx.stroke();
+      }
+    } else if (xTicks) {
+      for (let i = 0; i < xTicks.length - 1; i++) {
+        const step = (xTicks[i + 1] - xTicks[i]) / 5;
+        for (let m = 1; m <= 4; m++) {
+          const px = toX(xTicks[i] + m * step);
+          ctx.beginPath();
+          ctx.moveTo(px, padT);
+          ctx.lineTo(px, padT + plotH);
+          ctx.stroke();
+        }
+      }
+    }
+    // Major lines on top
+    ctx.strokeStyle = '#d5d1c7';
+    ctx.lineWidth = Math.max(1, 1.4 * k);
+    yTicks.forEach(t => {
+      const py = toY(t);
+      if (!inPlotY(py)) return;
+      ctx.beginPath();
+      ctx.moveTo(padL, py);
+      ctx.lineTo(padL + plotW, py);
+      ctx.stroke();
+    });
+    const vMajor = isBar
+      ? categories.map((c, i) => padL + stepX * (i + 0.5))
+      : (xTicks ? xTicks.map(toX) : []);
+    vMajor.forEach(px => {
+      ctx.beginPath();
+      ctx.moveTo(px, padT);
+      ctx.lineTo(px, padT + plotH);
+      ctx.stroke();
+    });
+  } else if (gridStyle !== 'none') {
+    const dash = gridStyle === 'dashed'
+      ? [6 * k, 5 * k]
+      : gridStyle === 'dotted' ? [2 * k, 5 * k] : [];
+    ctx.strokeStyle = '#cccccc';
+    ctx.lineWidth = Math.max(1, 1.4 * k);
+    ctx.setLineDash(dash);
+    yTicks.forEach(t => {
+      const py = toY(t);
+      if (!inPlotY(py)) return;
+      ctx.beginPath();
+      ctx.moveTo(padL, py);
+      ctx.lineTo(padL + plotW, py);
+      ctx.stroke();
+    });
+    const vLines = isBar
+      ? categories.map((c, i) => padL + stepX * (i + 0.5))
+      : (xTicks ? xTicks.map(toX) : []);
+    vLines.forEach(px => {
+      ctx.beginPath();
+      ctx.moveTo(px, padT);
+      ctx.lineTo(px, padT + plotH);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+  }
+
+  // ---- Y-axis tick marks and numbers ----
+  ctx.font = `${tickFont}px ${fontName}`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
 
   yTicks.forEach(t => {
     const py = toY(t);
-    if (py < padT - 2 || py > padT + plotH + 2) return;
-
-    if (showGrid) {
-      ctx.strokeStyle = '#cccccc';
-      ctx.lineWidth = 1.4;
-      ctx.setLineDash([6, 5]);
-      ctx.beginPath();
-      ctx.moveTo(padL, py);
-      ctx.lineTo(padL + plotW, py);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
+    if (!inPlotY(py)) return;
 
     ctx.strokeStyle = '#1c1b18';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * k;
     ctx.beginPath();
-    ctx.moveTo(padL - 9, py);
+    ctx.moveTo(padL - 9 * k, py);
     ctx.lineTo(padL, py);
     ctx.stroke();
 
     ctx.fillStyle = '#1c1b18';
-    ctx.fillText(String(t), padL - 16, py);
+    ctx.fillText(String(t), padL - 16 * k, py);
   });
 
-  // BAR CHART
-  if (currentChartType === 'bar') {
-    const categories = [];
-    const parsed = [];
-
-    list.forEach(s => {
-      const { xs, ys } = pairXY(s.x_values, s.values, true);
-      if (ys.length === 0) return;
-      xs.forEach(c => {
-        if (!categories.includes(c)) categories.push(c);
-      });
-      const errs = splitNumbers(s.errors);
-      parsed.push({ s, xs, ys, errs });
-    });
-
-    const nCats = Math.max(categories.length, 1);
-    const stepX = plotW / nCats;
-
+  // ---- BAR CHART ----
+  if (isBar) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.font = `23px ${fontName}`;
+    ctx.font = `${tickFont}px ${fontName}`;
 
     categories.forEach((cat, idx) => {
       const cx = padL + stepX * (idx + 0.5);
       ctx.strokeStyle = '#1c1b18';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2 * k;
       ctx.beginPath();
       ctx.moveTo(cx, padT + plotH);
-      ctx.lineTo(cx, padT + plotH + 9);
+      ctx.lineTo(cx, padT + plotH + 9 * k);
       ctx.stroke();
 
       ctx.fillStyle = '#1c1b18';
-      ctx.fillText(cat, cx, padT + plotH + 16);
+      ctx.fillText(cat, cx, padT + plotH + 16 * k);
     });
 
     const groupW = stepX * Math.min(Math.max(barWidthRatio, 0.15), 0.88);
-    const singleW = groupW / Math.max(parsed.length, 1);
+    const singleW = groupW / Math.max(barParsed.length, 1);
     const basePy = toY(Math.max(0, yTickMin));
 
-    parsed.forEach((item, gIdx) => {
+    barParsed.forEach((item, gIdx) => {
       const { s, xs, ys, errs } = item;
       xs.forEach((cat, i) => {
         const catIdx = categories.indexOf(cat);
@@ -516,30 +716,32 @@ function draw() {
         const topPy = toY(ys[i]);
         const bh = basePy - topPy;
 
-        ctx.fillStyle = s.hatch ? createBarPattern(ctx, s.color, s.hatch) : s.color;
+        ctx.fillStyle = s.hatch ? createBarPattern(ctx, s.color, s.hatch, k) : s.color;
         ctx.fillRect(bx, topPy, bw, bh);
         ctx.strokeStyle = '#1c1b18';
-        ctx.lineWidth = 2.2;
+        ctx.lineWidth = 2.2 * k;
         ctx.strokeRect(bx, topPy, bw, bh);
 
         // Optional error bar on bar
         const errVal = errs.length === ys.length ? errs[i] : (errs.length === 1 ? errs[0] : 0);
         if (errVal > 0) {
-          drawErrorBar(ctx, bx + bw / 2, toY(ys[i] - errVal), toY(ys[i] + errVal));
+          drawErrorBar(ctx, bx + bw / 2, toY(ys[i] - errVal), toY(ys[i] + errVal), '#1c1b18', k);
         }
 
         if (showValues) {
           ctx.fillStyle = '#1c1b18';
-          ctx.font = `21px ${fontName}`;
+          ctx.font = `${valueFont}px ${fontName}`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(String(ys[i]), bx + bw / 2, topPy - (errVal > 0 ? 14 : 7));
+          ctx.fillText(String(ys[i]), bx + bw / 2, topPy - (errVal > 0 ? 14 * k : 7 * k));
+          ctx.font = `${tickFont}px ${fontName}`;
+          ctx.textBaseline = 'top';
         }
       });
     });
 
-  // HISTOGRAM
-  } else if (currentChartType === 'histogram') {
+  // ---- HISTOGRAM ----
+  } else if (isHist) {
     const vals = splitNumbers(list[0] ? list[0].values : '');
     if (vals.length > 0) {
       const minV = Math.min(...vals);
@@ -563,67 +765,37 @@ function draw() {
         ctx.fillStyle = list[0].color || '#2c4c3e';
         ctx.fillRect(bx, topPy, stepW, basePy - topPy);
         ctx.strokeStyle = '#1c1b18';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2 * k;
         ctx.strokeRect(bx, topPy, stepW, basePy - topPy);
 
         ctx.fillStyle = '#1c1b18';
-        ctx.font = `21px ${fontName}`;
+        ctx.font = `${valueFont}px ${fontName}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText((minV + i * binW).toFixed(0), bx, padT + plotH + 14);
+        ctx.fillText((minV + i * binW).toFixed(0), bx, padT + plotH + 14 * k);
       });
     }
 
-  // LINE, FILLED LINE, OR SCATTER + BEST FIT
+  // ---- LINE, FILLED LINE, OR SCATTER + BEST FIT ----
   } else {
-    let allX = [0];
-    list.forEach(s => {
-      const { xs } = pairXY(s.x_values, s.values, false);
-      allX.push(...xs);
-    });
-
-    let xTicks = scaleX.length >= 2
-      ? [...new Set(scaleX)].sort((a, b) => a - b)
-      : buildAutoTicks(Math.min(...allX), Math.max(...allX, 1));
-
-    const xTickMin = xTicks[0];
-    const xTickMax = xTicks[xTicks.length - 1];
-    const xSpan = (xTickMax - xTickMin) || 1;
-    // Matplotlib 4.5% horizontal breathing margin so points at x=0 and x=50 aren't stuck on the frame border
-    const xDomainMin = xTickMin - xSpan * 0.045;
-    const xDomainMax = xTickMax + xSpan * 0.045;
-
-    const toX = val => padL + ((val - xDomainMin) / (xDomainMax - xDomainMin)) * plotW;
-
-    // Vertical grid lines and X-axis ticks
+    // X-axis tick marks and numbers
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.font = `23px ${fontName}`;
+    ctx.font = `${tickFont}px ${fontName}`;
 
     xTicks.forEach(t => {
       const px = toX(t);
       if (px < padL - 2 || px > padL + plotW + 2) return;
 
-      if (showGrid) {
-        ctx.strokeStyle = '#cccccc';
-        ctx.lineWidth = 1.4;
-        ctx.setLineDash([6, 5]);
-        ctx.beginPath();
-        ctx.moveTo(px, padT);
-        ctx.lineTo(px, padT + plotH);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
       ctx.strokeStyle = '#1c1b18';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2 * k;
       ctx.beginPath();
       ctx.moveTo(px, padT + plotH);
-      ctx.lineTo(px, padT + plotH + 9);
+      ctx.lineTo(px, padT + plotH + 9 * k);
       ctx.stroke();
 
       ctx.fillStyle = '#1c1b18';
-      ctx.fillText(String(t), px, padT + plotH + 16);
+      ctx.fillText(String(t), px, padT + plotH + 16 * k);
     });
 
     list.forEach(s => {
@@ -647,8 +819,8 @@ function draw() {
       // Line or scatter best-fit line
       if ((currentChartType === 'line' || currentChartType === 'area') && s.linestyle !== 'None') {
         ctx.strokeStyle = s.color;
-        ctx.lineWidth = 3.8;
-        applyLineDash(ctx, s.linestyle);
+        ctx.lineWidth = 3.8 * k;
+        applyLineDash(ctx, s.linestyle, k);
 
         ctx.beginPath();
         xs.forEach((xv, i) => {
@@ -674,8 +846,8 @@ function draw() {
           const x1 = Math.min(...xs);
           const x2 = Math.max(...xs);
           ctx.strokeStyle = s.color;
-          ctx.lineWidth = 3.0;
-          ctx.setLineDash([10, 7]);
+          ctx.lineWidth = 3.0 * k;
+          ctx.setLineDash([10 * k, 7 * k]);
           ctx.beginPath();
           ctx.moveTo(toX(x1), toY(m * x1 + b));
           ctx.lineTo(toX(x2), toY(m * x2 + b));
@@ -684,22 +856,24 @@ function draw() {
         }
       }
 
-      // Error bars and markers
+      // Error bars, markers, and value labels
       xs.forEach((xv, i) => {
         const px = toX(xv);
         const py = toY(ys[i]);
         const errVal = errs.length === ys.length ? errs[i] : (errs.length === 1 ? errs[0] : 0);
         if (errVal > 0) {
-          drawErrorBar(ctx, px, toY(ys[i] - errVal), toY(ys[i] + errVal), s.color);
+          drawErrorBar(ctx, px, toY(ys[i] - errVal), toY(ys[i] + errVal), s.color, k);
         }
-        drawMarker(ctx, s.marker, px, py, s.color);
+        drawMarker(ctx, s.marker, px, py, s.color, k);
 
         if (showValues) {
           ctx.fillStyle = '#1c1b18';
-          ctx.font = `20px ${fontName}`;
+          ctx.font = `${valueFont}px ${fontName}`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(String(ys[i]), px, py - 13);
+          ctx.fillText(String(ys[i]), px, py - 13 * k);
+          ctx.font = `${tickFont}px ${fontName}`;
+          ctx.textBaseline = 'top';
         }
       });
     });
@@ -710,8 +884,8 @@ function draw() {
     const ry = toY(Number(refLineRaw));
     if (ry >= padT && ry <= padT + plotH) {
       ctx.strokeStyle = '#555555';
-      ctx.lineWidth = 2.2;
-      ctx.setLineDash([4, 5]);
+      ctx.lineWidth = 2.2 * k;
+      ctx.setLineDash([4 * k, 5 * k]);
       ctx.beginPath();
       ctx.moveTo(padL, ry);
       ctx.lineTo(padL + plotW, ry);
@@ -722,106 +896,119 @@ function draw() {
 
   // Main L-shaped axis frame (top and right spines hidden like Matplotlib)
   ctx.strokeStyle = '#1c1b18';
-  ctx.lineWidth = 2.4;
+  ctx.lineWidth = 2.4 * k;
   ctx.beginPath();
   ctx.moveTo(padL, padT);
   ctx.lineTo(padL, padT + plotH);
   ctx.lineTo(padL + plotW, padT + plotH);
   ctx.stroke();
 
-  // Title, X label, and Y label
+  // Title (auto-shrunk and wrapped so it never runs off the page)
+  const titleLayout = layoutTitle(ctx, title, fontName, titleFont, W - 70 * k);
   ctx.fillStyle = '#1c1b18';
-  ctx.font = `28px ${fontName}`;
+  ctx.font = `${titleLayout.size}px ${fontName}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
-  ctx.fillText(title, padL + plotW / 2, padT - 24);
+  if (titleLayout.lines.length === 1) {
+    ctx.fillText(titleLayout.lines[0], padL + plotW / 2, padT - 20 * k);
+  } else {
+    ctx.fillText(titleLayout.lines[1], padL + plotW / 2, padT - 14 * k);
+    ctx.fillText(titleLayout.lines[0], padL + plotW / 2, padT - 14 * k - titleLayout.size * 1.12);
+  }
 
-  ctx.font = `24px ${fontName}`;
+  // Axis labels
+  ctx.font = `${labelFont}px ${fontName}`;
   ctx.textBaseline = 'top';
-  ctx.fillText(xlabel, padL + plotW / 2, padT + plotH + 60);
+  ctx.fillText(xlabel, padL + plotW / 2, padT + plotH + 60 * k);
 
   ctx.save();
-  ctx.translate(42, padT + plotH / 2);
+  ctx.translate(padL * 0.31, padT + plotH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText(ylabel, 0, 0);
   ctx.restore();
 
-  // Optional legend box
+  // Optional legend box, sized to fit the longest name
   if (showLegend && list.length > 0) {
-    const legX = padL + 26;
-    const legY = padT + 18;
-    const rowH = 34;
-    const boxW = 230;
-    const boxH = list.length * rowH + 16;
+    ctx.font = `${valueFont}px ${fontName}`;
+    let maxTxt = 0;
+    list.forEach(s => {
+      maxTxt = Math.max(maxTxt, ctx.measureText(s.label).width);
+    });
+
+    const rowH = Math.max(30 * k, valueFont * 1.5);
+    const boxW = Math.max(150 * k, maxTxt + 76 * k);
+    const boxH = list.length * rowH + 16 * k;
+    const legX = padL + 26 * k;
+    const legY = padT + 18 * k;
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
     ctx.fillRect(legX, legY, boxW, boxH);
     ctx.strokeStyle = '#1c1b18';
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.6 * k;
     ctx.strokeRect(legX, legY, boxW, boxH);
 
     list.forEach((s, idx) => {
-      const cy = legY + 24 + idx * rowH;
+      const cy = legY + 8 * k + rowH * (idx + 0.5);
       ctx.fillStyle = s.color;
-      ctx.fillRect(legX + 14, cy - 7, 24, 14);
+      ctx.fillRect(legX + 14 * k, cy - 7 * k, 24 * k, 14 * k);
       ctx.fillStyle = '#1c1b18';
-      ctx.font = `20px ${fontName}`;
+      ctx.font = `${valueFont}px ${fontName}`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(s.label, legX + 48, cy);
+      ctx.fillText(s.label, legX + 48 * k, cy);
     });
   }
 
-  updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showGrid, showLegend, list);
+  updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showLegend, list);
 }
 
-function applyLineDash(ctx, style) {
-  if (style === '--') ctx.setLineDash([13, 8]);
-  else if (style === ':') ctx.setLineDash([4, 6]);
-  else if (style === '-.') ctx.setLineDash([12, 6, 3, 6]);
+function applyLineDash(ctx, style, k) {
+  if (style === '--') ctx.setLineDash([13 * k, 8 * k]);
+  else if (style === ':') ctx.setLineDash([4 * k, 6 * k]);
+  else if (style === '-.') ctx.setLineDash([12 * k, 6 * k, 3 * k, 6 * k]);
   else ctx.setLineDash([]);
 }
 
-function drawErrorBar(ctx, x, yLow, yHigh, color = '#1c1b18') {
+function drawErrorBar(ctx, x, yLow, yHigh, color, k) {
   ctx.strokeStyle = color;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 2.2 * k;
   ctx.beginPath();
   ctx.moveTo(x, yLow);
   ctx.lineTo(x, yHigh);
-  ctx.moveTo(x - 7, yLow);
-  ctx.lineTo(x + 7, yLow);
-  ctx.moveTo(x - 7, yHigh);
-  ctx.lineTo(x + 7, yHigh);
+  ctx.moveTo(x - 7 * k, yLow);
+  ctx.lineTo(x + 7 * k, yLow);
+  ctx.moveTo(x - 7 * k, yHigh);
+  ctx.lineTo(x + 7 * k, yHigh);
   ctx.stroke();
 }
 
-function drawMarker(ctx, type, x, y, color) {
+function drawMarker(ctx, type, x, y, color, k) {
   if (type === 'None') return;
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
-  const r = 7;
+  const r = 7 * k;
 
   if (type === 's') {
     ctx.fillRect(x - r, y - r, r * 2, r * 2);
   } else if (type === '^') {
     ctx.beginPath();
-    ctx.moveTo(x, y - r - 2);
-    ctx.lineTo(x - r - 1, y + r);
-    ctx.lineTo(x + r + 1, y + r);
+    ctx.moveTo(x, y - r - 2 * k);
+    ctx.lineTo(x - r - 1 * k, y + r);
+    ctx.lineTo(x + r + 1 * k, y + r);
     ctx.closePath();
     ctx.fill();
   } else if (type === 'D') {
     ctx.beginPath();
-    ctx.moveTo(x, y - r - 2);
-    ctx.lineTo(x + r + 2, y);
-    ctx.lineTo(x, y + r + 2);
-    ctx.lineTo(x - r - 2, y);
+    ctx.moveTo(x, y - r - 2 * k);
+    ctx.lineTo(x + r + 2 * k, y);
+    ctx.lineTo(x, y + r + 2 * k);
+    ctx.lineTo(x - r - 2 * k, y);
     ctx.closePath();
     ctx.fill();
   } else if (type === 'x') {
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 * k;
     ctx.beginPath();
     ctx.moveTo(x - r, y - r);
     ctx.lineTo(x + r, y + r);
@@ -843,14 +1030,34 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// Generate neat, human-written Python code
-function updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showGrid, showLegend, list) {
+// Generate neat, human-written Python code matching the current settings
+function updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showLegend, list) {
+  const W = clampInt('res_w', 1400, 400, 6000);
+  const H = clampInt('res_h', 900, 400, 6000);
+  const fontKey = document.getElementById('font_family').value;
+  const ML_FONTS = {
+    georgia: 'Georgia',
+    times: 'Times New Roman',
+    mono: 'Courier New',
+    verdana: 'Verdana',
+    trebuchet: 'Trebuchet MS'
+  };
+  const titleFs = Math.round(clampInt('title_font', 28, 8, 200) * 0.4);
+  const labelFs = Math.round(clampInt('label_font', 24, 8, 200) * 0.4);
+  const tickFs = Math.round(clampInt('tick_font', 23, 8, 200) * 0.4);
+  const gridStyle = document.getElementById('grid_style').value;
+
+  const fw = +(W / 200).toFixed(2);
+  const fh = +(H / 200).toFixed(2);
+
   const lines = [
     "import matplotlib.pyplot as plt",
-    "",
-    "fig, ax = plt.subplots(figsize=(7.0, 4.5), dpi=300)",
     ""
   ];
+  if (ML_FONTS[fontKey]) {
+    lines.push(`plt.rcParams['font.family'] = '${ML_FONTS[fontKey]}'`, "");
+  }
+  lines.push(`fig, ax = plt.subplots(figsize=(${fw}, ${fh}), dpi=200)`, "");
 
   if (currentChartType === 'bar') {
     lines.push("# categories and bar heights");
@@ -889,9 +1096,10 @@ function updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showGrid, showL
 
   lines.push("");
   lines.push("# labels and scale");
-  lines.push(`ax.set_title('${title.replace(/'/g, "\\'")}')`);
-  lines.push(`ax.set_xlabel('${xlabel.replace(/'/g, "\\'")}')`);
-  lines.push(`ax.set_ylabel('${ylabel.replace(/'/g, "\\'")}')`);
+  lines.push(`ax.set_title('${title.replace(/'/g, "\\'")}', fontsize=${titleFs})`);
+  lines.push(`ax.set_xlabel('${xlabel.replace(/'/g, "\\'")}', fontsize=${labelFs})`);
+  lines.push(`ax.set_ylabel('${ylabel.replace(/'/g, "\\'")}', fontsize=${labelFs})`);
+  lines.push(`ax.tick_params(labelsize=${tickFs})`);
 
   if (currentChartType !== 'bar' && scaleX.length >= 2) {
     const sx = [...new Set(scaleX)].sort((a, b) => a - b);
@@ -901,8 +1109,13 @@ function updatePythonCode(title, xlabel, ylabel, scaleX, scaleY, showGrid, showL
     const sy = [...new Set(scaleY)].sort((a, b) => a - b);
     lines.push(`ax.set_yticks([${sy.join(', ')}])`);
   }
-  if (showGrid) {
-    lines.push("ax.grid(True, linestyle='--', color='#cccccc')");
+  if (gridStyle === 'dashed' || gridStyle === 'solid' || gridStyle === 'dotted') {
+    const ls = gridStyle === 'dashed' ? '--' : gridStyle === 'dotted' ? ':' : '-';
+    lines.push(`ax.grid(True, linestyle='${ls}', color='#cccccc')`);
+  } else if (gridStyle === 'paper') {
+    lines.push("ax.minorticks_on()");
+    lines.push("ax.grid(True, linestyle='--', color='#cccccc', linewidth=0.8)");
+    lines.push("ax.grid(which='minor', linestyle=':', color='#dddddd', linewidth=0.5)");
   }
   lines.push("ax.spines['top'].set_visible(False)");
   lines.push("ax.spines['right'].set_visible(False)");
@@ -919,7 +1132,7 @@ function downloadPNG() {
   const canvas = document.getElementById('graphCanvas');
   const a = document.createElement('a');
   a.href = canvas.toDataURL('image/png');
-  a.download = 'graph_300dpi.png';
+  a.download = `graph_${canvas.width}x${canvas.height}.png`;
   a.click();
 }
 
